@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+.DS_Store
+demo_cache/
+demo_profile.json
+
+# Runtime caches and experiment outputs
+data/
+_archive/
+*.log
+*.npz
+
+# Local crawler state
+datacrawl/data/
+datacrawl/logs/
+datacrawl/zhihu_crawler/data/
+datacrawl/zhihu_crawler/logs/
+datacrawl/zhihu_crawler/cookies.json
+
+# Virtualenvs and editor files
+.venv/
+.idea/
+.vscode/

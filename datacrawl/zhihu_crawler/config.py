@@ -21,13 +21,17 @@ class CrawlConfig:
 
     # 爬取限制
     max_pages: int = 10  # 每个任务最大爬取页数
-    delay_between_requests: float = 2.0  # 请求间隔（秒）
+    delay_between_requests: float = 0.6  # 初始请求间隔（秒）
+    min_delay_between_requests: float = 0.15
+    max_delay_between_requests: float = 2.5
+    throttle_jitter_ratio: float = 0.2
     max_retries: int = 3  # 最大重试次数
     debug_logging: bool = os.getenv("ZHIHU_DEBUG_LOGS", "0").strip().lower() in {"1", "true", "yes", "on"}
+    block_resource_types: tuple = ("image", "media", "font")
 
     # 选择器配置（当知乎页面结构变化时需要更新）
     selectors: dict = field(default_factory=lambda: {
-        "content_item": ".ContentItem, .AnswerItem, .ArticleItem",
+        "content_item": ".ContentItem, .AnswerItem, .ArticleItem, .PinItem",
         "title": "h2.ContentItem-title, .ContentItem-title a, .ContentItem-title span",
         "content": ".RichContent-inner, .RichContent",
         "author": ".AuthorInfo-name",

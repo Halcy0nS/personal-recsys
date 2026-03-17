@@ -114,7 +114,12 @@ def crawl_author_flow(crawler: UnifiedCrawler, content_type: str):
 
     if confirm in ('', 'y', 'yes'):
         if content_type == "all":
-            results = crawler.crawl_author_all_content(author_id, max_pages, target_count=target_count)
+            results = crawler.crawl_author_all_content(
+                author_id,
+                max_pages,
+                target_count=target_count,
+                mode="full",
+            )
             total = sum(r.total_count for r in results.values())
             console.print(f"\n[bold green]✓ 成功爬取 {total} 条内容[/bold green]")
             for content_type, result in results.items():
@@ -122,7 +127,15 @@ def crawl_author_flow(crawler: UnifiedCrawler, content_type: str):
                     console.print(f"[dim]{content_type}: {', '.join(result.saved_files)}[/dim]")
         else:
             method = getattr(crawler, method_name)
-            result = method(author_id, max_pages, target_count=target_count)
+            if content_type == "answers":
+                result = method(
+                    author_id,
+                    max_pages,
+                    target_count=target_count,
+                    mode="full",
+                )
+            else:
+                result = method(author_id, max_pages, target_count=target_count)
 
             if result.success:
                 console.print(f"\n[bold green]✓ {result.message}[/bold green]")
@@ -142,6 +155,17 @@ def main():
     parser.add_argument("--type", type=str, choices=["answers", "articles", "all"], default="answers", help="爬取内容类型")
     parser.add_argument("--pages", type=int, default=5, help="最大爬取页数（作者任务中 0 表示抓全量）")
     parser.add_argument("--target-count", type=int, default=0, help="作者任务目标条数（0 表示不限）")
+    parser.add_argument("--mode", type=str, choices=["index", "detail", "full"], default="full", help="作者回答抓取模式")
+    parser.add_argument("--detail-workers", type=int, default=4, help="作者回答详情抓取 worker 数")
+    parser.add_argument("--detail-min-workers", type=int, default=4, help="作者回答详情抓取最小并发 worker 数")
+    parser.add_argument("--detail-max-workers", type=int, default=10, help="作者回答详情抓取最大并发 worker 数")
+    parser.add_argument("--detail-checkpoint-interval", type=int, default=100, help="作者回答详情 checkpoint 频率（每 N 条）")
+    parser.add_argument("--detail-log-interval", type=int, default=100, help="作者回答详情日志频率（每 N 条）")
+    parser.add_argument("--batch-size", type=int, default=200, help="作者回答全量分批时的每批目标条数")
+    parser.add_argument("--max-batches", type=int, default=0, help="作者回答全量分批时的最大批次数（0 不限）")
+    parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True, help="作者回答全量/详情模式是否断点续跑")
+    parser.add_argument("--max-empty-batches", type=int, default=5, help="作者回答全量分批时允许空批次重试次数")
+    parser.add_argument("--empty-batch-retry-delay-sec", type=int, default=5, help="作者回答全量分批空批次重试基础等待秒数")
 
     args = parser.parse_args()
 
@@ -164,11 +188,41 @@ def main():
             crawler.ensure_login()
 
             if args.type == "answers":
-                result = crawler.crawl_author_answers(args.author, args.pages, target_count=args.target_count)
+                result = crawler.crawl_author_answers(
+                    args.author,
+                    args.pages,
+                    target_count=args.target_count,
+                    mode=args.mode,
+                    detail_workers=max(1, args.detail_workers),
+                    detail_min_workers=max(1, args.detail_min_workers),
+                    detail_max_workers=max(1, args.detail_max_workers),
+                    detail_checkpoint_interval=max(20, args.detail_checkpoint_interval),
+                    detail_log_interval=max(20, args.detail_log_interval),
+                    batch_size=max(1, args.batch_size),
+                    max_batches=args.max_batches,
+                    resume=args.resume,
+                    max_empty_batches=max(0, args.max_empty_batches),
+                    empty_batch_retry_delay_sec=max(0, args.empty_batch_retry_delay_sec),
+                )
             elif args.type == "articles":
                 result = crawler.crawl_author_articles(args.author, args.pages, target_count=args.target_count)
             else:
-                results = crawler.crawl_author_all_content(args.author, args.pages, target_count=args.target_count)
+                results = crawler.crawl_author_all_content(
+                    args.author,
+                    args.pages,
+                    target_count=args.target_count,
+                    mode=args.mode,
+                    detail_workers=max(1, args.detail_workers),
+                    detail_min_workers=max(1, args.detail_min_workers),
+                    detail_max_workers=max(1, args.detail_max_workers),
+                    detail_checkpoint_interval=max(20, args.detail_checkpoint_interval),
+                    detail_log_interval=max(20, args.detail_log_interval),
+                    batch_size=max(1, args.batch_size),
+                    max_batches=args.max_batches,
+                    resume=args.resume,
+                    max_empty_batches=max(0, args.max_empty_batches),
+                    empty_batch_retry_delay_sec=max(0, args.empty_batch_retry_delay_sec),
+                )
                 total = sum(r.total_count for r in results.values())
                 print(f"✓ 成功爬取 {total} 条内容")
                 return

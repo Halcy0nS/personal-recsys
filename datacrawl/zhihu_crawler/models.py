@@ -25,6 +25,8 @@ class ZhihuContent:
     content_type: str = ""  # 'answer', 'article', 'pin', 'question'
     title: Optional[str] = None
     content: str = ""
+    content_html: str = ""
+    content_text: str = ""
     excerpt: str = ""  # 摘要
     author: ZhihuAuthor = field(default_factory=ZhihuAuthor)
     created_time: str = ""
