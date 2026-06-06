@@ -7,11 +7,14 @@ LLM Reranker 服务 - 基于 Pointwise 评分的精排重排
 """
 
 import json
+import logging
 import time
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 from ..utils.lm_studio_client import LMStudioLLMClient
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,23 +41,31 @@ class LLMReranker:
     def __init__(self,
                  llm_client: Optional[LMStudioLLMClient] = None,
                  model: str = "qwen3-reranker-8b",
-                 base_url: str = "http://localhost:1234/v1",
+                 base_url: str = "https://api.siliconflow.cn/v1",
+                 api_key: str = "sk-ggilimolrndxadykgitkcfzkglamdhkyqvvtbjkftrxtjicb",
                  rerank_top_n: int = 50,
                  strategy: str = "pointwise"):
         """
         Args:
             llm_client: LLM 客户端 (可复用已有实例)
             model: LLM 模型 ID
-            base_url: LM Studio API 地址
+            base_url: SiliconFlow API 地址
+            api_key: SiliconFlow API 密钥
             rerank_top_n: 从粗排结果取多少条送入 rerank
             strategy: 当前仅支持 pointwise
         """
         if strategy != "pointwise":
             raise ValueError(f"Unsupported rerank strategy: {strategy}")
 
+        # Map model name for SiliconFlow compatibility
+        mapped_model = model
+        if model.lower().replace("/", "") in ("qwen3-reranker-8b", "qwenqwen3-reranker-8b"):
+            mapped_model = "Qwen/Qwen3-Reranker-8B"
+
         self.llm_client = llm_client or LMStudioLLMClient(
             base_url=base_url,
-            model=model,
+            model=mapped_model,
+            api_key=api_key,
             temperature=0.1,
             max_tokens=500
         )
@@ -112,35 +123,66 @@ class LLMReranker:
 
     def _parse_response(self, response_text: str, item_id: str) -> RerankerResult:
         """解析 LLM 返回的 JSON 评分"""
-        # 清理可能的思考标签和多余内容
-        text = response_text.strip()
-
-        # 移除 <think>...</think> 标签
         import re
-        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+        cleaned = response_text.strip()
 
-        # 尝试提取 JSON
-        json_match = re.search(r'\{[^{}]*\}', text)
-        if json_match:
-            text = json_match.group()
+        # 1. 移除 Markdown 代码块标记（如 ```json ... ``` 或 ``` ... ```）
+        cleaned = re.sub(r"```(?:json)?", "", cleaned, flags=re.IGNORECASE).replace("```", "").strip()
+
+        # 2. 移除 <think>...</think> 标签及其中间的内容
+        cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
+        if "</think>" in cleaned:
+            cleaned = cleaned.split("</think>")[-1].strip()
+
+        # 3. 提取包含在 {...} 中的 JSON 内容 (使用 DOTALL 并且匹配贪婪的最长可能包含 nested structure)
+        # 用 r"\{.*\}" 支持带括号嵌套，比 r"\{[^{}]*\}" 更健壮
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if match:
+            cleaned = match.group(0)
 
         try:
-            data = json.loads(text)
+            data = json.loads(cleaned)
+            # 兼容不同字段类型转化
+            try:
+                relevance_score = float(data.get("relevance_score", 5.0))
+            except (TypeError, ValueError):
+                relevance_score = 5.0
+
+            try:
+                confidence = float(data.get("confidence", 0.5))
+            except (TypeError, ValueError):
+                confidence = 0.5
+
+            reasoning = str(data.get("reasoning", ""))
+            
+            matched_topics = data.get("matched_topics", [])
+            if not isinstance(matched_topics, list):
+                matched_topics = [str(matched_topics)] if matched_topics else []
+            else:
+                matched_topics = [str(t) for t in matched_topics]
+
+            concerns = data.get("concerns", [])
+            if not isinstance(concerns, list):
+                concerns = [str(concerns)] if concerns else []
+            else:
+                concerns = [str(c) for c in concerns]
+
             return RerankerResult(
                 item_id=item_id,
-                relevance_score=float(data.get("relevance_score", 5)),
-                confidence=float(data.get("confidence", 0.5)),
-                reasoning=data.get("reasoning", ""),
-                matched_topics=data.get("matched_topics", []),
-                concerns=data.get("concerns", [])
+                relevance_score=relevance_score,
+                confidence=confidence,
+                reasoning=reasoning,
+                matched_topics=matched_topics,
+                concerns=concerns
             )
-        except (json.JSONDecodeError, ValueError):
-            # 解析失败，返回中性分数
+        except (json.JSONDecodeError, ValueError) as e:
+            # 解析失败，返回中性分数 (5.0)
+            logger.warning("Failed to parse JSON response for item %s: %s", item_id, str(e))
             return RerankerResult(
                 item_id=item_id,
                 relevance_score=5.0,
                 confidence=0.1,
-                reasoning=f"JSON parse failed: {text[:100]}",
+                reasoning=f"JSON parse failed: {cleaned[:100]}",
                 matched_topics=[],
                 concerns=["parse_error"]
             )
@@ -151,7 +193,7 @@ class LLMReranker:
                profile_styles: List[str],
                profile_negatives: List[str],
                exemplar_titles: List[str],
-               coarse_ranked_ids: List[str] = None) -> List[RerankerResult]:
+               coarse_ranked_ids: Optional[List[str]] = None) -> List[RerankerResult]:
         """
         对候选进行 LLM Pointwise 重排序
 
@@ -177,7 +219,7 @@ class LLMReranker:
 
         results = []
         total = len(ids_to_rerank)
-        print(f"  LLM Reranking {total} candidates...")
+        logger.info("LLM Reranking %d candidates...", total)
 
         for i, item_id in enumerate(ids_to_rerank):
             candidate = candidates.get(item_id)
@@ -214,10 +256,10 @@ class LLMReranker:
             results.append(result)
 
             if (i + 1) % 5 == 0:
-                print(f"    Progress: {i+1}/{total}")
+                logger.debug("    Progress: %d/%d", i + 1, total)
 
         # 按 relevance_score 降序排序
         results.sort(key=lambda r: r.relevance_score, reverse=True)
 
-        print(f"  Reranking complete. Top score: {results[0].relevance_score if results else 'N/A'}")
+        logger.info("Reranking complete. Top score: %s", results[0].relevance_score if results else 'N/A')
         return results

@@ -2,16 +2,19 @@
 PipelineOrchestrator - 组合 ProfileBuilder → RetrievalManager → Reranker → Ranker
 """
 
+import logging
 import time
 from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from ..contracts.config import PipelineConfig
 from ..contracts.types import ProfileContext, ScoreMap
 from ..services.profile_builder import DefaultProfileBuilder
-from ..services.retrieval_manager import RetrievalManager, I2IRetriever, TagRetriever
+from ..services.retrieval_manager import RetrievalManager, I2IRetriever, TagRetriever, FeedbackRetriever
 from ..services.ranker_adapter import DefaultRanker
 from ..services.reranker import LLMReranker
-from ..ranking.scorer import ScoreComponent
+from ..ranking.scorer import ConfigurableScorer, ScoreComponent
 from ..utils.embeddings import BaseEmbedder
 
 
@@ -48,6 +51,7 @@ class PipelineOrchestrator:
                 negative_weight=config.tag_negative_weight,
                 hard_filter_negative=config.tag_hard_filter_negative
             ),
+            FeedbackRetriever()
         ])
 
         self.ranker = DefaultRanker(
@@ -67,7 +71,8 @@ class PipelineOrchestrator:
 
         return LLMReranker(
             model=self.config.reranker_model,
-            base_url=self.config.lm_studio_base_url,
+            base_url=self.config.reranker_base_url,
+            api_key=self.config.reranker_api_key,
             rerank_top_n=self.config.rerank_top_n,
             strategy=self.config.rerank_strategy,
         )
@@ -133,7 +138,7 @@ class PipelineOrchestrator:
         )
         coarse_ranked = coarse_ranker.rank(
             score_map,
-            top_k=len(candidates),  # 全量排序以确定 rerank 顺序
+            top_k=min(len(candidates), self.config.rerank_top_n * 2),  # 仅排序 reranker 所需数量
             min_score=None
         )
         timing["coarse_ranking"] = time.time() - t0
@@ -162,7 +167,7 @@ class PipelineOrchestrator:
                     coarse_ranked_ids=coarse_ranked_ids
                 )
             except Exception as e:
-                print(f"  Rerank stage failed, fallback to baseline ranking: {e}")
+                logger.warning("Rerank stage failed, fallback to baseline ranking: %s", e)
                 rerank_results = None
             finally:
                 timing["rerank"] = time.time() - t0
@@ -177,17 +182,26 @@ class PipelineOrchestrator:
         # Step 4: 最终精排 (融合所有分数)
         t0 = time.time()
 
-        # 如果有 rerank 分数，调整权重分配
+        # 如果有 rerank 分数，将 RERANK 权重合并到用户选择的权重中
         if rerank_results:
-            rerank_weights = {
-                ScoreComponent.I2I: 0.25,
-                ScoreComponent.TAG: 0.15,
-                ScoreComponent.POPULARITY: 0.10,
-                ScoreComponent.RERANK: 0.50  # rerank 分数占主导
-            }
+            # 获取用户的基础权重（优先级：per-call custom_weights > config.custom_weights > preset）
+            base_weights = dict(custom_weights) if custom_weights else None
+            if base_weights is None:
+                base_weights = dict(self.config.custom_weights) if self.config.custom_weights else None
+            if base_weights is None:
+                base_weights = dict(ConfigurableScorer.PRESETS[preset]["weights"])
+
+            # 将 RERANK 以配置权重插入，其余权重按比例缩放
+            rerank_w = self.config.rerank_weight
+            merged_weights = {}
+            scale = 1.0 - rerank_w
+            for comp, w in base_weights.items():
+                merged_weights[comp] = w * scale
+            merged_weights[ScoreComponent.RERANK] = rerank_w
+
             final_ranker = DefaultRanker(
                 preset=preset,
-                custom_weights=rerank_weights
+                custom_weights=merged_weights
             )
         else:
             final_ranker = DefaultRanker(
@@ -202,7 +216,8 @@ class PipelineOrchestrator:
         )
         timing["final_ranking"] = time.time() - t0
 
-        # 计算被过滤的数量
+        # 统计 tag 分数为 0 的 item（可能原因：hard-filter by negative tags，或完全无标签匹配）
+        # 注意：当无显式画像时 tag 统一回退为 0.5，此时 filter_count 始终为 0
         filter_count = sum(
             1 for scores in score_map.values()
             if scores.get("tag", 0.0) == 0.0

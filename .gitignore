@@ -21,3 +21,10 @@ datacrawl/zhihu_crawler/cookies.json
 .venv/
 .idea/
 .vscode/
+
+# Local generated files
+今日简报_*.md
+demo_cache/
+scratch/
+experiments/
+research_zeroentropy/

@@ -11,12 +11,14 @@ from enum import Enum
 
 class ScoreComponent(Enum):
     """分数组成成分"""
-    I2I = "i2i"              # Item-to-Item相似度
+    I2I = "i2i"              # Item-to-Item相似度 (Rocchio Score)
     TAG = "tag"              # 标签匹配分数
-    POPULARITY = "popularity" # 流行度/质量分数
+    POPULARITY = "popularity" # 流行度分数
+    SOURCE = "source"        # 来源偏好分数
+    FACET = "facet"          # 深度/风格偏好分数
+    QUALITY = "quality"      # LLM 质量评分
+    EXPLORE = "explore"      # 探索加分
     RERANK = "rerank"        # LLM重排分数
-    RECENCY = "recency"      # 时效性分数
-    DIVERSITY = "diversity"  # 多样性分数
 
 
 @dataclass
@@ -141,9 +143,12 @@ class ConfigurableScorer:
     PRESETS = {
         "balanced": {
             "weights": {
-                ScoreComponent.I2I: 0.5,
-                ScoreComponent.TAG: 0.3,
-                ScoreComponent.POPULARITY: 0.2
+                ScoreComponent.I2I: 0.4,
+                ScoreComponent.TAG: 0.2,
+                ScoreComponent.POPULARITY: 0.1,
+                ScoreComponent.SOURCE: 0.15,
+                ScoreComponent.FACET: 0.1,
+                ScoreComponent.QUALITY: 0.05
             },
             "description": "平衡模式 - 综合考虑内容相似度和质量"
         },
@@ -151,8 +156,7 @@ class ConfigurableScorer:
             "weights": {
                 ScoreComponent.I2I: 0.3,
                 ScoreComponent.TAG: 0.5,
-                ScoreComponent.POPULARITY: 0.1,
-                ScoreComponent.DIVERSITY: 0.1
+                ScoreComponent.POPULARITY: 0.2
             },
             "description": "探索模式 - 弱化精确匹配，发现新内容"
         },

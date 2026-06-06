@@ -14,7 +14,7 @@ Implemented in this repository:
 - Retrieval with item-to-item similarity and rule-based tag matching
 - Ranking with normalized weighted score fusion and preset strategies
 - Optional LM Studio helpers for embeddings and LLM calls
-- Scripted demos in `example_usage.py` and `run_real_data.py`
+- Scripted demos in `example_usage.py` and `run_real_data.py` (canonical entrypoints now live under `scripts/demo/`, while the top-level files remain compatibility wrappers)
 
 Not implemented in the current codebase:
 
@@ -148,16 +148,79 @@ Important limitation:
 ```text
 personal-recsys/
 ├── src/                    # Runtime recommendation engine
+├── experiments/            # Experiment and evaluation implementations
+├── scripts/                # Canonical script entrypoints
 ├── tests/                  # Script-style validation
-├── example_usage.py        # Small end-to-end demo with mock embeddings
-├── run_real_data.py        # Real-data demo with LM Studio and exported JSON
+├── research/               # Research notes
 ├── docs/                   # Supplementary docs and prompt references
 ├── data/                   # Local data/cache directory
 ├── datacrawl/              # Separate data collection workspace
+├── example_usage.py        # Top-level compatibility wrapper
+├── run_real_data.py        # Top-level compatibility wrapper
 └── requirements.txt
 ```
 
-`docs/` is useful context, but it is not imported by the runtime engine.
+`docs/` is useful context, but it is not imported by the runtime engine. `scripts/` is now the canonical entrypoint directory; the top-level `run_*.py` files and `example_usage.py` remain as compatibility wrappers.
+
+## Local MVP CLI
+
+The repository now also includes a no-LLM local MVP CLI for the minimum single-user recommendation workflow:
+
+```bash
+python3 scripts/product/run_mvp.py \
+  --collection path/to/collection.json \
+  --collection-format zhihu \
+  --candidates path/to/candidates.json \
+  --candidates-format zhihu
+```
+
+First-version characteristics:
+
+- single-command workflow
+- implicit profile only
+- no explicit profile and no reranker
+- supports `zhihu` and `generic` JSON inputs
+- writes `run_config.json`, `input_summary.json`, `recommendations.json`, and `engine_meta.json`
+
+The first-version `generic` JSON format requires each item to include:
+
+- `id`
+- `title`
+- `content`
+- `tags`
+- `metadata`
+
+## End-to-End Crawl To Recommendation
+
+The repository now also includes an orchestration entrypoint that chains the existing Zhihu crawler and the local recommendation MVP into one command:
+
+```bash
+python3 scripts/product/run_end_to_end.py \
+  --favorites-user cjm926 \
+  --author-id some-author-id
+```
+
+If you omit `--favorites-user`, `--author-id`, `--pages`, or `--top-k`, the same entrypoint now falls back to an interactive product prompt and asks for the missing values before running.
+
+First-version constraints:
+
+- directly reuses `datacrawl/zhihu_crawler`
+- always performs a fresh crawl
+- uses author all-content (answers + articles) as the default candidate pool
+- runs headless by default, but requires an existing `datacrawl/zhihu_crawler/data/cookies.json`
+- first-time login is not handled by this command
+
+This command also writes:
+
+- `crawler_run_config.json`
+- `crawler_output_summary.json`
+- `end_to_end_run_config.json`
+
+Interactive example:
+
+```bash
+python3 scripts/product/run_end_to_end.py
+```
 
 ## Quick Start
 
@@ -170,7 +233,7 @@ python3 -m pip install -r requirements.txt
 Run the lightweight demo:
 
 ```bash
-python3 example_usage.py
+python3 scripts/demo/example_usage.py
 ```
 
 Run the script-based checks:
@@ -181,7 +244,7 @@ python3 tests/test_basic.py
 
 ## Real-Data Demo
 
-`run_real_data.py` demonstrates the engine with:
+`scripts/demo/run_real_data.py` demonstrates the engine with:
 
 - Zhihu-style JSON inputs loaded through `src/utils/data_loader.py`
 - LM Studio for embeddings and explicit-profile extraction
@@ -195,8 +258,38 @@ The script currently expects:
 Run it with:
 
 ```bash
-python3 run_real_data.py
+python3 scripts/demo/run_real_data.py
 ```
+
+## Simulator Experiment
+
+The repository also includes an offline `user simulator` experiment for comparing `fulltext` vs `adaptive compressed` article views with pairwise Glicko2 ranking. It writes `simulator ranking` artifacts only and should not be treated as human ground truth.
+
+Important caveat: the `compressed` lane evaluates simulator preference over structured evidence, not the full article as-written. See the representation caveats in [docs/simulator_glicko_experiment.md](docs/simulator_glicko_experiment.md).
+
+See [docs/simulator_glicko_experiment.md](docs/simulator_glicko_experiment.md) and run:
+
+```bash
+python3 scripts/experiments/run_simulator_glicko_experiment.py
+```
+
+## Product Roadmap
+
+The repository now also has a long-term product roadmap for evolving the current engine into a **local, single-user, interactive recommendation product**.
+
+This roadmap is intentionally different from runtime docs:
+
+- `README.md` describes current code facts
+- `docs/PROJECT_STATUS.md` describes current status
+- [docs/product_roadmap.md](docs/product_roadmap.md) describes the intended build sequence and product priorities
+
+The current priority order in that roadmap is:
+
+1. strengthen recommendation quality in the main engine
+2. productize a general rerank slot
+3. standardize evaluation as product R&D infrastructure
+4. add a local interaction loop
+5. harden the product experience
 
 ## Persistence
 

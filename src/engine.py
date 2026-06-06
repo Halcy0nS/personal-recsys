@@ -19,10 +19,9 @@ import hashlib
 from pathlib import Path
 
 from .profiling.implicit_profile import VectorCloud
-from .profiling.explicit_profile import UserExplicitProfile, ProfileExtractor
-from .retrieval.i2i_matcher import I2IMatcher, I2IResult, BatchI2IMatcher
-from .retrieval.tag_matcher import TagMatcher, TagMatchResult
-from .ranking.scorer import WeightedScorer, ConfigurableScorer, ScoreComponent, RankedItem
+from .profiling.explicit_profile import UserExplicitProfile
+from .profiling.feedback_memory import FeedbackMemory
+from .ranking.scorer import RankedItem
 from .utils.embeddings import BaseEmbedder, get_embedder
 
 from .contracts.config import PipelineConfig
@@ -99,6 +98,7 @@ class PersonalRecSys:
         # 用户画像
         self.vector_cloud: Optional[VectorCloud] = None
         self.explicit_profile: Optional[UserExplicitProfile] = None
+        self.feedback_memory: FeedbackMemory = FeedbackMemory()
         self.collection_items: List[Dict] = []
 
         # 候选内容池
@@ -297,11 +297,6 @@ class PersonalRecSys:
             item.embedding = embedding
             embedding_cache[item.item_id] = (text_hash, embedding)
 
-        for item in self.candidates.values():
-            if item.item_id in self.candidate_embeddings:
-                text_hash = self._hash_candidate_text(self._build_candidate_text(item))
-                embedding_cache[item.item_id] = (text_hash, np.asarray(self.candidate_embeddings[item.item_id], dtype=np.float32))
-
         self._save_candidate_embedding_cache(embedding_cache)
         print(f"Embedded {len(items_to_embed)} candidates ({cache_hits} cache hits)")
 
@@ -332,6 +327,7 @@ class PersonalRecSys:
         profile_ctx = ProfileContext(
             vector_cloud=self.vector_cloud,
             explicit_profile=self.explicit_profile,
+            feedback_memory=self.feedback_memory,
             summary=self.get_profile_summary()
         )
 

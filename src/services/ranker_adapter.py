@@ -2,6 +2,7 @@
 DefaultRanker - 封装现有精排逻辑
 """
 
+import logging
 from typing import Dict, List, Optional
 
 from ..contracts.interfaces import BaseRanker
@@ -9,6 +10,8 @@ from ..contracts.types import ScoreMap
 from ..ranking.scorer import (
     ConfigurableScorer, WeightedScorer, ScoreComponent, RankedItem
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DefaultRanker(BaseRanker):
@@ -38,7 +41,6 @@ class DefaultRanker(BaseRanker):
         return normalized
 
     def rank(self, score_map: ScoreMap,
-             item_metadata: Optional[Dict] = None,
              top_k: int = 20,
              min_score: Optional[float] = None) -> List[RankedItem]:
         """精排融合"""
@@ -52,7 +54,7 @@ class DefaultRanker(BaseRanker):
                     comp = ScoreComponent(comp_name)
                     enum_scores[comp] = score
                 except ValueError:
-                    pass  # 跳过未知的 component
+                    logger.debug("Unknown score component in score_map: %s", comp_name)
             item_scores[item_id] = enum_scores
 
         # 使用 ConfigurableScorer

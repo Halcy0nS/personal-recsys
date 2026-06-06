@@ -48,6 +48,9 @@ class PipelineConfig:
     enable_reranker: bool = False
     rerank_strategy: str = "pointwise"
     rerank_top_n: int = 50
+    rerank_weight: float = 0.50  # RERANK 在最终融合中的权重占比（启用 rerank 时生效）
+    reranker_base_url: str = "https://api.siliconflow.cn/v1"
+    reranker_api_key: str = "sk-ggilimolrndxadykgitkcfzkglamdhkyqvvtbjkftrxtjicb"
 
     # Processing
     batch_size: int = 32

@@ -58,7 +58,6 @@ class BaseRanker(ABC):
 
     @abstractmethod
     def rank(self, score_map: ScoreMap,
-             item_metadata: Optional[Dict] = None,
              top_k: int = 20,
              min_score: Optional[float] = None) -> list:
         """
@@ -66,7 +65,6 @@ class BaseRanker(ABC):
 
         Args:
             score_map: {item_id: {component -> score}}
-            item_metadata: 额外元数据
             top_k: 返回数量
             min_score: 最低分阈值
 
