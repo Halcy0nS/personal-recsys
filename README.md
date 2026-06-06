@@ -313,3 +313,9 @@ When `cache_dir` is configured, the engine may read and write:
 ## License Status
 
 No `LICENSE` file is present in the repository root.
+
+## Companion Tools (Ecosystem)
+
+This project is the **Recommendation Engine (Right Brain)** of the Pasika architecture. It is designed to be loosely coupled with a note-generation factory (Left Brain) via standard Markdown files. 
+
+We highly recommend using [llmwiki](https://github.com/lucasastorian/llmwiki) by lucasastorian as your knowledge-base generator. `personal-recsys` reads the markdown files produced by `llmwiki` to construct your implicit user profile (Vector Cloud). Please note that `personal-recsys` is completely independent and does not require `llmwiki` to run, as long as you provide a folder of Markdown notes.
