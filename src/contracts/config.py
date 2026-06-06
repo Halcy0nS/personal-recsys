@@ -2,6 +2,7 @@
 PipelineConfig - 集中式运行时配置
 """
 
+import os
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
@@ -50,7 +51,7 @@ class PipelineConfig:
     rerank_top_n: int = 50
     rerank_weight: float = 0.50  # RERANK 在最终融合中的权重占比（启用 rerank 时生效）
     reranker_base_url: str = "https://api.siliconflow.cn/v1"
-    reranker_api_key: str = "sk-ggilimolrndxadykgitkcfzkglamdhkyqvvtbjkftrxtjicb"
+    reranker_api_key: str = field(default_factory=lambda: os.getenv("SILICONFLOW_API_KEY", ""))
 
     # Processing
     batch_size: int = 32

@@ -6,6 +6,7 @@ LLM Reranker 服务 - 基于 Pointwise 评分的精排重排
   粗召回 (I2I+Tag) → Top-N → **LLM Rerank** → 最终 Top-K
 """
 
+import os
 import json
 import logging
 import time
@@ -42,7 +43,7 @@ class LLMReranker:
                  llm_client: Optional[LMStudioLLMClient] = None,
                  model: str = "qwen3-reranker-8b",
                  base_url: str = "https://api.siliconflow.cn/v1",
-                 api_key: str = "sk-ggilimolrndxadykgitkcfzkglamdhkyqvvtbjkftrxtjicb",
+                 api_key: Optional[str] = None,
                  rerank_top_n: int = 50,
                  strategy: str = "pointwise"):
         """
@@ -62,10 +63,12 @@ class LLMReranker:
         if model.lower().replace("/", "") in ("qwen3-reranker-8b", "qwenqwen3-reranker-8b"):
             mapped_model = "Qwen/Qwen3-Reranker-8B"
 
+        actual_api_key = api_key or os.getenv("SILICONFLOW_API_KEY", "")
+
         self.llm_client = llm_client or LMStudioLLMClient(
             base_url=base_url,
             model=mapped_model,
-            api_key=api_key,
+            api_key=actual_api_key,
             temperature=0.1,
             max_tokens=500
         )
