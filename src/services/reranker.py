@@ -41,7 +41,7 @@ class LLMReranker:
 
     def __init__(self,
                  llm_client: Optional[LMStudioLLMClient] = None,
-                 model: str = "qwen3-reranker-8b",
+                 model: str = "Qwen/Qwen2.5-7B-Instruct",
                  base_url: str = "https://api.siliconflow.cn/v1",
                  api_key: Optional[str] = None,
                  rerank_top_n: int = 50,

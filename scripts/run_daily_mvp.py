@@ -57,17 +57,43 @@ def step_3_recommend() -> tuple[list, dict]:
     wiki_dir = "/Users/salmon/research/wiki"
     capsule_dir = "datacrawl/rss_crawler/data/compressed"
 
-    config = PipelineConfig(
-        embedding_dim=768, 
-        top_k=5,
-        preset="precision",
-        enable_reranker=True,
-        embedder_type="gemini",
-        reranker_model="qwen3-reranker-8b"
-    )
+    # 检测 LM Studio 是否可用
+    lm_studio_url = "http://localhost:1234/v1"
+    use_lmstudio = False
+    try:
+        import urllib.request
+        resp = urllib.request.urlopen(f"{lm_studio_url}/models", timeout=2)
+        use_lmstudio = True
+    except Exception:
+        use_lmstudio = False
 
-    print("  - 初始化 Gemini Embedder 与 SiliconFlow Reranker")
-    embedder = get_embedder("gemini", dim=config.embedding_dim)
+    if use_lmstudio:
+        print("  ✓ 检测到 LM Studio 在线，将使用本地 BGE 模型进行文本向量化 (1024维)。")
+        config = PipelineConfig(
+            embedding_dim=1024,
+            top_k=5,
+            preset="precision",
+            enable_reranker=True,
+            embedder_type="lmstudio",
+            reranker_model="Qwen/Qwen2.5-7B-Instruct"
+        )
+        embedder = get_embedder(
+            "lmstudio",
+            dim=1024,
+            base_url=lm_studio_url,
+            model="text-embedding-bge-large-zh-v1.5"
+        )
+    else:
+        print("  ! LM Studio 未启动。自动回退使用 Google Gemini 进行文本向量化 (768维)。")
+        config = PipelineConfig(
+            embedding_dim=768, 
+            top_k=5,
+            preset="precision",
+            enable_reranker=True,
+            embedder_type="gemini",
+            reranker_model="Qwen/Qwen2.5-7B-Instruct"
+        )
+        embedder = get_embedder("gemini", dim=768)
     
     recsys = PersonalRecSys(embedder=embedder, config=config)
 
@@ -77,7 +103,27 @@ def step_3_recommend() -> tuple[list, dict]:
     wiki_collection = [
         {"title": c.title, "content": c.content, "source": "wiki"} for c in wiki_candidates
     ]
+    
+    # 暂存已从缓存加载的显式画像
+    cached_explicit = recsys.explicit_profile
+    
     recsys.build_profile_from_collection(wiki_collection, llm_client=None)
+
+    # 恢复或生成默认的显式画像，供 Reranker 使用，防止被覆盖为 None
+    if cached_explicit is not None:
+        recsys.explicit_profile = cached_explicit
+        print("  ✓ 恢复已缓存的显式画像，跳过 LLM 画像重新抽取。")
+    else:
+        from src.profiling.explicit_profile import UserExplicitProfile
+        recsys.explicit_profile = UserExplicitProfile(
+            core_topics=["认知心理学", "分布式系统", "个人效率", "FIRE运动"],
+            writing_style=["深度长文", "逻辑严密"],
+            content_depth=["专业级"],
+            negative_tags=["情绪输出", "软广", "标题党"],
+            authors=[],
+            custom_tags={}
+        )
+        print("  ✓ 未检测到已缓存的显式画像，已初始化默认画像进行重排。")
 
     # 加载候选胶囊
     print("  - 加载侯选胶囊并进行匹配")

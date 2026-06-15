@@ -119,7 +119,16 @@ class PersonalRecSys:
         if vector_cloud_path.exists():
             try:
                 self.vector_cloud = VectorCloud.load(str(vector_cloud_path))
-                print(f"Loaded vector cloud from cache: {len(self.vector_cloud.vectors)} vectors")
+                # 校验缓存向量维度是否一致，防止模型切换时维度冲突崩溃
+                if self.vector_cloud and len(self.vector_cloud.vectors) > 0:
+                    cached_dim = len(self.vector_cloud.vectors[0])
+                    if cached_dim != self.embedding_dim:
+                        print(f"Dimension mismatch in cached vector cloud: {cached_dim} vs {self.embedding_dim}. Clearing cached vector cloud.")
+                        self.vector_cloud = None
+                    else:
+                        print(f"Loaded vector cloud from cache: {len(self.vector_cloud.vectors)} vectors")
+                else:
+                    print(f"Loaded vector cloud from cache: {len(self.vector_cloud.vectors)} vectors")
             except Exception as e:
                 print(f"Failed to load vector cloud: {e}")
 
@@ -173,6 +182,10 @@ class PersonalRecSys:
                 item_ids = data["item_ids"]
                 text_hashes = data["text_hashes"]
                 embeddings = data["embeddings"]
+                # 校验缓存向量维度是否一致，防止模型切换时维度冲突崩溃
+                if len(embeddings) > 0 and embeddings.shape[1] != self.embedding_dim:
+                    print(f"Dimension mismatch in candidate embedding cache: {embeddings.shape[1]} vs {self.embedding_dim}. Discarding cache.")
+                    return {}
         except Exception as e:
             print(f"Failed to load candidate embedding cache: {e}")
             return {}

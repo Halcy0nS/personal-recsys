@@ -41,15 +41,20 @@ class PipelineOrchestrator:
             embedding_dim=config.embedding_dim
         )
 
+        from ..services.retrieval_manager import ExplicitSemanticRetriever
         self.retrieval_manager = RetrievalManager([
             I2IRetriever(
                 top_k=config.i2i_top_k,
-                metric=config.i2i_metric
+                metric=config.i2i_metric,
+                time_decay_rate=config.i2i_time_decay_rate
             ),
             TagRetriever(
                 positive_weight=config.tag_positive_weight,
                 negative_weight=config.tag_negative_weight,
                 hard_filter_negative=config.tag_hard_filter_negative
+            ),
+            ExplicitSemanticRetriever(
+                embedder=embedder
             ),
             FeedbackRetriever()
         ])
@@ -212,8 +217,18 @@ class PipelineOrchestrator:
         ranked_items = final_ranker.rank(
             score_map,
             top_k=top_k,
-            min_score=min_score
+            min_score=min_score,
+            candidates=candidates,
+            mmr_lambda=self.config.mmr_lambda
         )
+        
+        # 将 Reranker 的理由等信息注入 RankedItem
+        if rerank_results:
+            rr_map = {rr.item_id: rr for rr in rerank_results}
+            for item in ranked_items:
+                if item.item_id in rr_map:
+                    item.reasoning = rr_map[item.item_id].reasoning
+                    
         timing["final_ranking"] = time.time() - t0
 
         # 统计 tag 分数为 0 的 item（可能原因：hard-filter by negative tags，或完全无标签匹配）

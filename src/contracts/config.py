@@ -27,7 +27,7 @@ class PipelineConfig:
     lm_studio_base_url: str = "http://localhost:1234/v1"
     llm_model: str = "qwen/qwen3.5-9b"
     embedding_model: str = "text-embedding-bge-large-zh-v1.5"
-    reranker_model: str = "qwen3-reranker-8b"
+    reranker_model: str = "Qwen/Qwen2.5-7B-Instruct"
 
     # Profile
     max_profile_items: int = 50
@@ -38,9 +38,11 @@ class PipelineConfig:
     tag_positive_weight: float = 1.0
     tag_negative_weight: float = -2.0
     tag_hard_filter_negative: bool = True
+    i2i_time_decay_rate: float = 0.05
 
     # Ranking
     top_k: int = 20
+    mmr_lambda: float = 0.85
     preset: str = "balanced"
     custom_weights: Optional[Dict] = None
     min_score: Optional[float] = None

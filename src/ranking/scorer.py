@@ -13,6 +13,7 @@ class ScoreComponent(Enum):
     """分数组成成分"""
     I2I = "i2i"              # Item-to-Item相似度 (Rocchio Score)
     TAG = "tag"              # 标签匹配分数
+    SEMANTIC = "semantic"    # 语义标签匹配分数
     POPULARITY = "popularity" # 流行度分数
     SOURCE = "source"        # 来源偏好分数
     FACET = "facet"          # 深度/风格偏好分数
@@ -29,6 +30,7 @@ class RankedItem:
     component_scores: Dict[str, float] = field(default_factory=dict)
     metadata: Dict = field(default_factory=dict)
     rank: int = 0
+    reasoning: Optional[str] = None  # 大模型重排时生成的推荐理由
 
 
 class WeightedScorer:
@@ -53,15 +55,8 @@ class WeightedScorer:
         # 存储用于归一化的统计信息
         self.score_stats: Dict[str, Dict] = {}
 
-    def _normalize_score(self, score: float, component: str,
-                        all_scores: List[float]) -> float:
+    def _normalize_score(self, score: float, min_val: float, max_val: float) -> float:
         """将分数归一化到[0, 1]范围"""
-        if not all_scores or len(all_scores) < 2:
-            return max(0.0, min(1.0, score))
-
-        min_val = min(all_scores)
-        max_val = max(all_scores)
-
         if max_val == min_val:
             return 1.0 if score >= max_val else 0.0
 
@@ -82,15 +77,23 @@ class WeightedScorer:
         """
         item_metadata = item_metadata or {}
 
-        # 收集所有分数用于归一化
-        all_scores_by_component: Dict[ScoreComponent, List[float]] = {
-            comp: [] for comp in self.weights.keys()
+        # 收集所有分数用于归一化，注意兼容 string keys 和 enum keys
+        all_scores_by_component: Dict[str, List[float]] = {
+            comp.value if isinstance(comp, Enum) else comp: [] 
+            for comp in self.weights.keys()
         }
 
         for scores in item_scores.values():
             for comp, score in scores.items():
-                if comp in all_scores_by_component:
-                    all_scores_by_component[comp].append(score)
+                comp_key = comp.value if isinstance(comp, Enum) else comp
+                if comp_key in all_scores_by_component:
+                    all_scores_by_component[comp_key].append(score)
+
+        # 预计算每个component的min_val和max_val以避免 O(N^2)
+        score_bounds: Dict[str, tuple[float, float]] = {}
+        for comp_key, comp_scores in all_scores_by_component.items():
+            if comp_scores and len(comp_scores) >= 2:
+                score_bounds[comp_key] = (min(comp_scores), max(comp_scores))
 
         # 计算每个item的最终分数
         results = []
@@ -99,16 +102,20 @@ class WeightedScorer:
             final_score = 0.0
 
             for component, weight in self.weights.items():
-                raw_score = scores.get(component, 0.0)
+                comp_key = component.value if isinstance(component, Enum) else component
+                raw_score = scores.get(comp_key, scores.get(component, 0.0))
 
                 # 归一化
                 if self.normalize:
-                    all_comp_scores = all_scores_by_component.get(component, [])
-                    norm_score = self._normalize_score(raw_score, component.value, all_comp_scores)
+                    bounds = score_bounds.get(comp_key)
+                    if bounds:
+                        norm_score = self._normalize_score(raw_score, bounds[0], bounds[1])
+                    else:
+                        norm_score = max(0.0, min(1.0, raw_score))
                 else:
                     norm_score = raw_score
 
-                component_scores[component.value] = norm_score
+                component_scores[comp_key] = norm_score
                 final_score += weight * norm_score
 
             # 应用自定义评分函数
@@ -143,8 +150,9 @@ class ConfigurableScorer:
     PRESETS = {
         "balanced": {
             "weights": {
-                ScoreComponent.I2I: 0.4,
-                ScoreComponent.TAG: 0.2,
+                ScoreComponent.I2I: 0.35,
+                ScoreComponent.TAG: 0.15,
+                ScoreComponent.SEMANTIC: 0.1,
                 ScoreComponent.POPULARITY: 0.1,
                 ScoreComponent.SOURCE: 0.15,
                 ScoreComponent.FACET: 0.1,
@@ -154,24 +162,27 @@ class ConfigurableScorer:
         },
         "exploration": {
             "weights": {
-                ScoreComponent.I2I: 0.3,
-                ScoreComponent.TAG: 0.5,
+                ScoreComponent.I2I: 0.25,
+                ScoreComponent.TAG: 0.35,
+                ScoreComponent.SEMANTIC: 0.2,
                 ScoreComponent.POPULARITY: 0.2
             },
             "description": "探索模式 - 弱化精确匹配，发现新内容"
         },
         "precision": {
             "weights": {
-                ScoreComponent.I2I: 0.7,
-                ScoreComponent.TAG: 0.2,
+                ScoreComponent.I2I: 0.6,
+                ScoreComponent.TAG: 0.15,
+                ScoreComponent.SEMANTIC: 0.15,
                 ScoreComponent.POPULARITY: 0.1
             },
             "description": "精确模式 - 强调查找与你收藏最相似的内容"
         },
         "quality": {
             "weights": {
-                ScoreComponent.I2I: 0.3,
-                ScoreComponent.TAG: 0.2,
+                ScoreComponent.I2I: 0.2,
+                ScoreComponent.TAG: 0.15,
+                ScoreComponent.SEMANTIC: 0.15,
                 ScoreComponent.POPULARITY: 0.5
             },
             "description": "质量模式 - 优先高质量/高互动内容"

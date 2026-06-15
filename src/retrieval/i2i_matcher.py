@@ -23,14 +23,16 @@ class I2IMatcher:
     实现 "因为我收藏了X，所以推荐像X的内容" 逻辑
     """
 
-    def __init__(self, top_k: int = 3, metric: str = "cosine"):
+    def __init__(self, top_k: int = 3, metric: str = "cosine", time_decay_rate: float = 0.05):
         """
         Args:
             top_k: 取收藏夹中最近的top_k个向量的平均相似度
             metric: 距离度量 (cosine/dot/euclidean)
+            time_decay_rate: 时序衰减率
         """
         self.top_k = top_k
         self.metric = metric
+        self.time_decay_rate = time_decay_rate
 
     def compute_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
         """计算两个向量的相似度"""
@@ -78,12 +80,17 @@ class I2IMatcher:
             sim = self.compute_similarity(candidate_vector, vec)
             similarities.append((sim, i))
 
-        # 排序取top_k
+        # 取top_k
         similarities.sort(reverse=True, key=lambda x: x[0])
         top_similarities = similarities[:self.top_k]
 
-        # 计算平均分
-        avg_score = np.mean([sim for sim, _ in top_similarities]) if top_similarities else 0.0
+        if not top_similarities:
+            avg_score = 0.0
+        else:
+            time_weights = user_vector_cloud.get_time_weights(self.time_decay_rate)
+            weighted_sum = sum(sim * time_weights[idx] for sim, idx in top_similarities)
+            weight_total = sum(time_weights[idx] for _, idx in top_similarities)
+            avg_score = weighted_sum / weight_total if weight_total > 0 else 0.0
 
         return I2IResult(
             item_id="",  # 由调用方填充
@@ -103,19 +110,58 @@ class BatchI2IMatcher:
                     candidate_ids: List[str],
                     user_vector_cloud: "VectorCloud") -> List[I2IResult]:
         """
-        批量计算匹配分数
-
-        Args:
-            candidate_vectors: 候选内容的embedding向量列表
-            candidate_ids: 对应的ID列表
-            user_vector_cloud: 用户的向量云
-
-        Returns:
-            List[I2IResult]: 匹配结果列表
+        批量计算匹配分数 (完全向量化版本)
         """
+        from ..profiling.implicit_profile import VectorCloud
+        if not isinstance(user_vector_cloud, VectorCloud) or not user_vector_cloud.vectors:
+            return [I2IResult(item_id=cid, i2i_score=0.0, matched_source_indices=[], similarities=[]) 
+                    for cid in candidate_ids]
+
+        if not candidate_vectors:
+            return []
+
+        # 构建候选矩阵并归一化
+        cand_mat = np.vstack(candidate_vectors).astype(np.float32)
+        norms = np.linalg.norm(cand_mat, axis=1, keepdims=True)
+        cand_mat = cand_mat / (norms + 1e-8)
+
+        # 获取向量云矩阵 (已归一化)
+        cloud_mat = user_vector_cloud.vectors_matrix
+
+        # 计算余弦相似度矩阵: shape (N_candidates, M_cloud_vectors)
+        sim_mat = np.dot(cand_mat, cloud_mat.T)
+        
+        N, M = sim_mat.shape
+        top_k = min(self.matcher.top_k, M)
+
+        if top_k == M:
+            top_indices = np.argsort(sim_mat, axis=1)[:, ::-1]
+            top_sims = np.take_along_axis(sim_mat, top_indices, axis=1)
+        else:
+            # np.argpartition is faster for O(N) extraction
+            top_indices_unsorted = np.argpartition(sim_mat, -top_k, axis=1)[:, -top_k:]
+            top_sims_unsorted = np.take_along_axis(sim_mat, top_indices_unsorted, axis=1)
+            
+            # Sort locally for each row
+            local_sort_idx = np.argsort(top_sims_unsorted, axis=1)[:, ::-1]
+            top_indices = np.take_along_axis(top_indices_unsorted, local_sort_idx, axis=1)
+            top_sims = np.take_along_axis(top_sims_unsorted, local_sort_idx, axis=1)
+
+        # 获取时序权重
+        time_weights = user_vector_cloud.get_time_weights(self.matcher.time_decay_rate)
+        weights_for_top = time_weights[top_indices]  # shape: (N, top_k)
+        weight_sums = np.sum(weights_for_top, axis=1)
+        weight_sums[weight_sums == 0] = 1e-8
+        
+        avg_scores = np.sum(top_sims * weights_for_top, axis=1) / weight_sums
+
         results = []
-        for vec, item_id in zip(candidate_vectors, candidate_ids):
-            result = self.matcher.match(vec, user_vector_cloud)
-            result.item_id = item_id
-            results.append(result)
+        for i in range(N):
+            results.append(I2IResult(
+                item_id=candidate_ids[i],
+                i2i_score=float(avg_scores[i]),
+                matched_source_indices=top_indices[i].tolist(),
+                similarities=top_sims[i].tolist()
+            ))
+
         return results

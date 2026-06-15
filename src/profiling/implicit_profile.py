@@ -17,16 +17,48 @@ class VectorCloud:
         self.embedding_dim = embedding_dim
         self.vectors: List[np.ndarray] = []
         self.metadata: List[Dict] = []  # 存储来源文章信息
+        self._vectors_mat: Optional[np.ndarray] = None  # Cache for matrix operations
+
+    def _invalidate_cache(self):
+        self._vectors_mat = None
+
+    @property
+    def vectors_matrix(self) -> np.ndarray:
+        """Get or create the 2D numpy array of all vectors"""
+        if self._vectors_mat is None:
+            if not self.vectors:
+                self._vectors_mat = np.empty((0, self.embedding_dim), dtype=np.float32)
+            else:
+                self._vectors_mat = np.vstack(self.vectors).astype(np.float32)
+        return self._vectors_mat
+
+    def get_time_weights(self, decay_rate: float = 0.05) -> np.ndarray:
+        """
+        计算时序衰减权重。假设列表末尾的向量是最新的兴趣。
+        Args:
+            decay_rate: 衰减系数
+        Returns:
+            np.ndarray: 权重数组，shape=(M,)
+        """
+        M = len(self.vectors)
+        if M == 0:
+            return np.array([], dtype=np.float32)
+        # 权重公式: exp(-decay_rate * (M - 1 - i))
+        # i 越大 (越新)，权重越接近 1.0
+        indices = np.arange(M)
+        weights = np.exp(-decay_rate * (M - 1 - indices))
+        return weights.astype(np.float32)
 
     def add_vector(self, vector: np.ndarray, metadata: Optional[Dict] = None):
         """添加单个向量到云中"""
-        if vector.shape[0] != self.embedding_dim:
-            raise ValueError(f"Expected dim {self.embedding_dim}, got {vector.shape[0]}")
+        if vector.shape[-1] != self.embedding_dim:
+            raise ValueError(f"Expected dim {self.embedding_dim}, got {vector.shape[-1]}")
 
         # 归一化向量
         normalized = vector / (np.linalg.norm(vector) + 1e-8)
         self.vectors.append(normalized)
         self.metadata.append(metadata or {})
+        self._invalidate_cache()
 
     def add_from_collection(self, embeddings: List[np.ndarray],
                            metadatas: Optional[List[Dict]] = None):
@@ -46,18 +78,20 @@ class VectorCloud:
         # 归一化查询向量
         query_normalized = query_vector / (np.linalg.norm(query_vector) + 1e-8)
 
-        # 计算与云中所有向量的余弦相似度
-        similarities = []
-        for i, vec in enumerate(self.vectors):
-            sim = np.dot(query_normalized, vec)
-            similarities.append((sim, i))
+        # Vectorized cosine similarity computation
+        similarities = np.dot(self.vectors_matrix, query_normalized)
 
-        # 取top_k
-        similarities.sort(reverse=True)
-        top_similarities = similarities[:top_k]
+        if len(similarities) <= top_k:
+            top_indices = np.argsort(similarities)[::-1].tolist()
+        else:
+            # Use argpartition for O(N) top_k extraction
+            top_indices_unsorted = np.argpartition(similarities, -top_k)[-top_k:]
+            top_similarities_unsorted = similarities[top_indices_unsorted]
+            # Sort the top_k locally
+            local_sort_idx = np.argsort(top_similarities_unsorted)[::-1]
+            top_indices = top_indices_unsorted[local_sort_idx].tolist()
 
-        avg_score = np.mean([sim for sim, _ in top_similarities])
-        top_indices = [idx for _, idx in top_similarities]
+        avg_score = float(np.mean(similarities[top_indices]))
 
         return avg_score, top_indices
 

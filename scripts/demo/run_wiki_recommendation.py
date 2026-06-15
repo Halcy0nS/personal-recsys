@@ -21,19 +21,42 @@ CACHE_DIR = "./data/wiki_recsys_cache"
 
 def build_wiki_engine() -> PersonalRecSys:
     """初始化推荐引擎"""
+    import os
+
+    # 1. 优先检测环境变量中的 Google Gemini API Key
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if gemini_key:
+        print("  ✓ 检测到 GEMINI_API_KEY，使用 Google Gemini 进行文本向量化 (768维)。")
+        config = PipelineConfig(
+            embedding_dim=768,
+            embedder_type="gemini",
+            top_k=5,
+            preset="precision",
+            batch_size=16,
+            cache_dir=CACHE_DIR,
+            enable_reranker=False
+        )
+        embedder = get_embedder("gemini", dim=768, api_key=gemini_key)
+        return PersonalRecSys(
+            embedder=embedder,
+            embedding_dim=768,
+            cache_dir=CACHE_DIR,
+            config=config,
+        )
+
+    # 2. 回退到原有逻辑 (LM Studio / Mock)
     config = PipelineConfig(
         embedding_dim=1024,
         embedder_type="lmstudio",
         embedding_model="text-embedding-bge-large-zh-v1.5",
         lm_studio_base_url="http://localhost:1234/v1",
         top_k=5,
-        preset="precision", # 精确模式 - 强调查找最相似的内容
+        preset="precision", # 精确模式 - 强调查查找最相似的内容
         batch_size=16,
         cache_dir=CACHE_DIR,
         enable_reranker=False # 演示暂不开启 reranker
     )
     
-    # 我们可能没有运行着 LM Studio 里的 embedding，如果是为了快速演示，如果失败可以降级到 mock
     try:
         import urllib.request
         resp = urllib.request.urlopen("http://localhost:1234/v1/models", timeout=2)
@@ -50,7 +73,7 @@ def build_wiki_engine() -> PersonalRecSys:
 
     return PersonalRecSys(
         embedder=embedder,
-        embedding_dim=1024,
+        embedding_dim=config.embedding_dim,
         cache_dir=CACHE_DIR,
         config=config,
     )

@@ -73,22 +73,42 @@ async def compress_article(
                 stats["skipped"] += 1
                 return
 
-            payload = {
-                "model": MODEL,
-                "system": SYSTEM_PROMPT,
-                "messages": [{"role": "user", "content": body}],
-                "max_tokens": 1024,
-                "thinking": {"type": "disabled"}
-            }
+            # 检测是否使用 Anthropic / Messages 协议
+            is_anthropic = "anthropic" in BASE_URL.lower() or "claude" in MODEL.lower()
 
-            headers = {
-                "x-api-key": API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
-            }
+            if is_anthropic:
+                payload = {
+                    "model": MODEL,
+                    "system": SYSTEM_PROMPT,
+                    "messages": [{"role": "user", "content": body}],
+                    "max_tokens": 1024,
+                    "thinking": {"type": "disabled"}
+                }
+                headers = {
+                    "x-api-key": API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                }
+                url = f"{BASE_URL}/v1/messages"
+            else:
+                # 兼容 OpenAI / DeepSeek 官方协议
+                payload = {
+                    "model": MODEL,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": body}
+                    ],
+                    "max_tokens": 1024
+                }
+                headers = {
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                base = BASE_URL
+                if not base.endswith("/v1") and "api.deepseek.com" in base:
+                    base = f"{base}/v1"
+                url = f"{base}/chat/completions"
 
-            url = f"{BASE_URL}/v1/messages"
-            
             # Trace
             print(f"[>] Compressing: {filename}...")
             
@@ -102,11 +122,16 @@ async def compress_article(
                 return
 
             data = response.json()
-            content_blocks = data.get("content", [])
             summary_text = ""
-            for block in content_blocks:
-                if block.get("type") == "text":
-                    summary_text += block.get("text", "")
+            if is_anthropic:
+                content_blocks = data.get("content", [])
+                for block in content_blocks:
+                    if block.get("type") == "text":
+                        summary_text += block.get("text", "")
+            else:
+                choices = data.get("choices", [])
+                if choices:
+                    summary_text = choices[0].get("message", {}).get("content", "")
             
             summary_text = summary_text.strip()
             

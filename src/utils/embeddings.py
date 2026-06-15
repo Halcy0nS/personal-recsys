@@ -8,6 +8,35 @@ from typing import List, Union, Optional, Callable
 import hashlib
 import json
 import urllib.request
+import os
+from pathlib import Path
+
+
+def _load_env_files():
+    # 自动读取当前项目根目录的 .env 以及用户主目录下的 ~/.env 环境变量
+    env_paths = [
+        Path(__file__).resolve().parents[2] / ".env",
+        Path.home() / ".env"
+    ]
+    for path in env_paths:
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" in line:
+                            key, val = line.split("=", 1)
+                            key = key.strip()
+                            val = val.strip().strip("'\"")
+                            if key and key not in os.environ:
+                                os.environ[key] = val
+            except Exception:
+                pass
+
+_load_env_files()
+
 
 
 class BaseEmbedder:
@@ -193,7 +222,7 @@ class GoogleEmbedder(BaseEmbedder):
     使用 google-genai 库并支持高并发 embed_batch 与重试
     """
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "text-embedding-004", dim: int = 768, **kwargs):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-embedding-2", dim: int = 768, **kwargs):
         super().__init__(dim)
         self.api_key = api_key
         self.model = model
@@ -236,12 +265,15 @@ class GoogleEmbedder(BaseEmbedder):
             except Exception as e:
                 err_msg = str(e)
                 
-                # 检查是否因为 text-embedding-004 废弃导致 404 NOT_FOUND
+                # 检查是否因为模型废弃/未找到导致 404 NOT_FOUND，执行双向备用切换
                 is_not_found = "404" in err_msg or "not_found" in err_msg.lower() or "not found" in err_msg.lower()
-                if is_not_found and self.model == "text-embedding-004":
-                    # 动态切换到当前可用且支持 output_dimensionality 降维的 gemini-embedding-2 模型
-                    self.model = "gemini-embedding-2"
-                    continue
+                if is_not_found:
+                    if self.model == "gemini-embedding-2":
+                        self.model = "text-embedding-004"
+                        continue
+                    elif self.model == "text-embedding-004":
+                        self.model = "gemini-embedding-2"
+                        continue
 
                 # 检查是否为 429 Too Many Requests 错误
                 is_429 = False

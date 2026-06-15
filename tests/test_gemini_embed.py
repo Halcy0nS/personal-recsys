@@ -12,8 +12,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from src.utils.embeddings import get_embedder, GoogleEmbedder
 
 def test_gemini_embedding():
-    # 使用之前验证成功的 API key
-    api_key = "AIzaSyCy2esuHFZWQDaSmJkO7cttLzKa3OOK52Y"
+    # 优先使用环境变量中的 API key
+    api_key = os.environ.get("GEMINI_API_KEY", "AIzaSyCy2esuHFZWQDaSmJkO7cttLzKa3OOK52Y")
     
     print("1. 测试工厂实例化...")
     embedder = get_embedder("gemini", api_key=api_key)
