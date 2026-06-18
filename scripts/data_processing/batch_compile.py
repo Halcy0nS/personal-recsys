@@ -63,6 +63,13 @@ async def compress_article(
 ):
     async with semaphore:
         filename = filepath.name
+        output_filepath = OUTPUT_DIR / filename
+        
+        if output_filepath.exists():
+            print(f"[~] Skip '{filename}': already compressed.")
+            stats["skipped"] += 1
+            return
+            
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()

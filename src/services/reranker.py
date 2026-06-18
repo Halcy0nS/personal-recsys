@@ -58,10 +58,8 @@ class LLMReranker:
         if strategy != "pointwise":
             raise ValueError(f"Unsupported rerank strategy: {strategy}")
 
-        # Map model name for SiliconFlow compatibility
+        # Use exact model string passed in
         mapped_model = model
-        if model.lower().replace("/", "") in ("qwen3-reranker-8b", "qwenqwen3-reranker-8b"):
-            mapped_model = "Qwen/Qwen3-Reranker-8B"
 
         actual_api_key = api_key or os.getenv("SILICONFLOW_API_KEY", "")
 
@@ -265,4 +263,86 @@ class LLMReranker:
         results.sort(key=lambda r: r.relevance_score, reverse=True)
 
         logger.info("Reranking complete. Top score: %s", results[0].relevance_score if results else 'N/A')
+        return results
+
+class CrossEncoderReranker:
+    """
+    专门针对 Cross-Encoder 架构模型的重排器。
+    使用真正的专用重排 API（如 /v1/rerank），输出精确的打分，不生成文本。
+    """
+    def __init__(self,
+                 base_url: str = "http://localhost:1234/v1",
+                 model: str = "qwen3-reranker-8b",
+                 rerank_top_n: int = 50):
+        self.base_url = base_url
+        self.model = model
+        self.rerank_top_n = rerank_top_n
+
+    def rerank(self,
+               candidates: Dict,
+               profile_topics: List[str],
+               profile_styles: List[str],
+               profile_negatives: List[str],
+               exemplar_titles: List[str],
+               coarse_ranked_ids: Optional[List[str]] = None) -> List[RerankerResult]:
+        
+        import urllib.request
+        import urllib.error
+
+        if coarse_ranked_ids:
+            ids_to_rerank = coarse_ranked_ids[:self.rerank_top_n]
+        else:
+            ids_to_rerank = list(candidates.keys())[:self.rerank_top_n]
+
+        if not ids_to_rerank:
+            return []
+
+        # 构建 query (知识胶囊摘要)
+        query = f"关注主题: {', '.join(profile_topics[:8])}。风格: {', '.join(profile_styles[:5])}。不喜欢: {', '.join(profile_negatives[:5])}。"
+
+        # 构建 documents
+        documents = []
+        for item_id in ids_to_rerank:
+            c = candidates[item_id]
+            doc_text = f"标题: {c.title}\n摘要: {c.content[:300]}"
+            documents.append(doc_text)
+
+        logger.info("Cross-Encoder Reranking %d candidates with model %s...", len(ids_to_rerank), self.model)
+
+        url = f"{self.base_url}/rerank"
+        payload = {
+            "model": self.model,
+            "query": query,
+            "documents": documents
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+
+        results = []
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                body = response.read().decode("utf-8")
+                resp_json = json.loads(body)
+                
+                # Jina/Cohere compatible response
+                for res in resp_json.get("results", []):
+                    idx = res["index"]
+                    score = res["relevance_score"]
+                    item_id = ids_to_rerank[idx]
+                    
+                    results.append(RerankerResult(
+                        item_id=item_id,
+                        relevance_score=score * 10.0, # 统一映射到 0-10 范围以兼容之前的逻辑
+                        confidence=0.9,
+                        reasoning="", # Cross-encoder cannot generate reasoning
+                        matched_topics=[],
+                        concerns=[]
+                    ))
+        except Exception as e:
+            logger.error("CrossEncoderReranker API failed: %s", e)
+            # Fallback
+            for item_id in ids_to_rerank:
+                results.append(RerankerResult(item_id, 5.0, 0.1, f"Error: {e}", [], []))
+
+        results.sort(key=lambda r: r.relevance_score, reverse=True)
         return results

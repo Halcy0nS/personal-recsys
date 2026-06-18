@@ -36,8 +36,10 @@ class CandidateItem:
     title: str
     content: str
     embedding: Optional[np.ndarray] = None
+    embedding_fine: Optional[np.ndarray] = None  # 新增高精细向量
     tags: List[str] = field(default_factory=list)
     metadata: Dict = field(default_factory=dict)
+
 
 
 @dataclass
@@ -71,13 +73,15 @@ class PersonalRecSys:
                  embedder: Optional[BaseEmbedder] = None,
                  embedding_dim: int = 1024,
                  cache_dir: Optional[str] = None,
-                 config: Optional[PipelineConfig] = None):
+                 config: Optional[PipelineConfig] = None,
+                 fine_embedder: Optional[BaseEmbedder] = None):
         """
         Args:
             embedder: Embedding模型，默认使用Mock
             embedding_dim: 向量维度
             cache_dir: 缓存目录路径
             config: 管线配置 (可选，新增参数)
+            fine_embedder: 高精细Embedding模型
         """
         self.embedder = embedder or get_embedder("mock", dim=embedding_dim)
         self.embedding_dim = embedding_dim
@@ -89,14 +93,28 @@ class PersonalRecSys:
             cache_dir=cache_dir,
         )
 
+        import os
+        self.coarse_embedder = self.embedder
+        self.fine_embedder = None
+        if self._config.enable_dual_embedder:
+            fine_api_key = os.environ.get("GEMINI_API_KEY", "")
+            self.fine_embedder = fine_embedder or get_embedder(
+                self._config.fine_embedder_type,
+                dim=self._config.fine_embedding_dim,
+                api_key=fine_api_key
+            )
+
         # 编排器
         self._orchestrator = PipelineOrchestrator(
             config=self._config,
-            embedder=self.embedder
+            embedder=self.coarse_embedder
         )
+        if self.fine_embedder:
+            self._orchestrator.fine_embedder = self.fine_embedder
 
         # 用户画像
         self.vector_cloud: Optional[VectorCloud] = None
+        self.vector_cloud_fine: Optional[VectorCloud] = None
         self.explicit_profile: Optional[UserExplicitProfile] = None
         self.feedback_memory: FeedbackMemory = FeedbackMemory()
         self.collection_items: List[Dict] = []
@@ -104,6 +122,7 @@ class PersonalRecSys:
         # 候选内容池
         self.candidates: Dict[str, CandidateItem] = {}
         self.candidate_embeddings: Dict[str, np.ndarray] = {}
+        self.candidate_embeddings_fine: Dict[str, np.ndarray] = {}
 
         # 加载缓存
         if self.cache_dir:
@@ -132,6 +151,26 @@ class PersonalRecSys:
             except Exception as e:
                 print(f"Failed to load vector cloud: {e}")
 
+        # 加载高精细向量云
+        if self._config.enable_dual_embedder:
+            vector_cloud_fine_path = self.cache_dir / "vector_cloud_fine.json"
+            if vector_cloud_fine_path.exists():
+                try:
+                    self.vector_cloud_fine = VectorCloud.load(str(vector_cloud_fine_path))
+                    # 校验缓存向量维度是否一致，防止模型切换时维度冲突崩溃
+                    if self.vector_cloud_fine and len(self.vector_cloud_fine.vectors) > 0:
+                        cached_dim = len(self.vector_cloud_fine.vectors[0])
+                        if cached_dim != self._config.fine_embedding_dim:
+                            print(f"Dimension mismatch in cached fine vector cloud: {cached_dim} vs {self._config.fine_embedding_dim}. Clearing cached fine vector cloud.")
+                            self.vector_cloud_fine = None
+                        else:
+                            print(f"Loaded fine vector cloud from cache: {len(self.vector_cloud_fine.vectors)} vectors")
+                    else:
+                        print(f"Loaded fine vector cloud from cache: {len(self.vector_cloud_fine.vectors)} vectors")
+                except Exception as e:
+                    print(f"Failed to load fine vector cloud: {e}")
+
+
         # 加载显式画像
         profile_path = self.cache_dir / "explicit_profile.json"
         if profile_path.exists():
@@ -153,6 +192,11 @@ class PersonalRecSys:
             vector_cloud_path = self.cache_dir / "vector_cloud.json"
             self.vector_cloud.save(str(vector_cloud_path))
 
+        # 保存高精细向量云
+        if self._config.enable_dual_embedder and self.vector_cloud_fine:
+            vector_cloud_fine_path = self.cache_dir / "vector_cloud_fine.json"
+            self.vector_cloud_fine.save(str(vector_cloud_fine_path))
+
         # 保存显式画像
         if self.explicit_profile:
             profile_path = self.cache_dir / "explicit_profile.json"
@@ -163,6 +207,12 @@ class PersonalRecSys:
             return None
 
         return self.cache_dir / "candidate_embeddings.npz"
+
+    def _get_candidate_embedding_fine_cache_path(self) -> Optional[Path]:
+        if not self.cache_dir:
+            return None
+
+        return self.cache_dir / "candidate_embeddings_fine.npz"
 
     def _build_candidate_text(self, item: CandidateItem) -> str:
         text = f"{item.title}\n{item.content}".strip()
@@ -196,6 +246,32 @@ class PersonalRecSys:
 
         return cache
 
+    def _load_candidate_embedding_cache_fine(self) -> Dict[str, tuple[str, np.ndarray]]:
+        """加载高精细候选 embedding 缓存。"""
+        cache_path = self._get_candidate_embedding_fine_cache_path()
+        if cache_path is None or not cache_path.exists():
+            return {}
+
+        try:
+            with np.load(cache_path, allow_pickle=False) as data:
+                item_ids = data["item_ids"]
+                text_hashes = data["text_hashes"]
+                embeddings = data["embeddings"]
+                # 校验缓存向量维度是否一致
+                fine_dim = self._config.fine_embedding_dim
+                if len(embeddings) > 0 and embeddings.shape[1] != fine_dim:
+                    print(f"Dimension mismatch in fine candidate embedding cache: {embeddings.shape[1]} vs {fine_dim}. Discarding.")
+                    return {}
+        except Exception as e:
+            print(f"Failed to load fine candidate embedding cache: {e}")
+            return {}
+
+        cache = {}
+        for item_id, text_hash, embedding in zip(item_ids.tolist(), text_hashes.tolist(), embeddings):
+            cache[str(item_id)] = (str(text_hash), np.array(embedding))
+
+        return cache
+
     def _save_candidate_embedding_cache(self, cache: Dict[str, tuple[str, np.ndarray]]):
         """保存候选 embedding 缓存。"""
         cache_path = self._get_candidate_embedding_cache_path()
@@ -220,6 +296,32 @@ class PersonalRecSys:
             text_hashes=text_hashes,
             embeddings=embeddings,
         )
+
+    def _save_candidate_embedding_cache_fine(self, cache: Dict[str, tuple[str, np.ndarray]]):
+        """保存高精细候选 embedding 缓存。"""
+        cache_path = self._get_candidate_embedding_fine_cache_path()
+        if cache_path is None:
+            return
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+        item_ids = np.array(list(cache.keys()), dtype=str)
+        text_hashes = np.array([cache[item_id][0] for item_id in item_ids], dtype=str)
+
+        if len(item_ids) > 0:
+            embeddings = np.stack([
+                np.asarray(cache[item_id][1], dtype=np.float32) for item_id in item_ids
+            ])
+        else:
+            embeddings = np.empty((0, self._config.fine_embedding_dim), dtype=np.float32)
+
+        np.savez_compressed(
+            cache_path,
+            item_ids=item_ids,
+            text_hashes=text_hashes,
+            embeddings=embeddings,
+        )
+
 
     def build_profile_from_collection(self,
                                       collection_items: List[Dict],
@@ -248,6 +350,7 @@ class PersonalRecSys:
 
         # 同步到引擎状态
         self.vector_cloud = profile_ctx.vector_cloud
+        self.vector_cloud_fine = getattr(profile_ctx, "vector_cloud_fine", None)
         self.explicit_profile = profile_ctx.explicit_profile
         self.collection_items = list(collection_items)
 
@@ -263,12 +366,24 @@ class PersonalRecSys:
         Args:
             items: 候选内容列表
         """
+        embedding_cache_fine = self._load_candidate_embedding_cache_fine() if self._config.enable_dual_embedder else {}
+
         for item in items:
             self.candidates[item.item_id] = item
 
             # 缓存embedding
             if item.embedding is not None:
                 self.candidate_embeddings[item.item_id] = item.embedding
+
+            if item.embedding_fine is not None:
+                self.candidate_embeddings_fine[item.item_id] = item.embedding_fine
+            elif item.item_id in embedding_cache_fine:
+                text = self._build_candidate_text(item)
+                text_hash = self._hash_candidate_text(text)
+                cached = embedding_cache_fine[item.item_id]
+                if cached[0] == text_hash:
+                    item.embedding_fine = cached[1]
+                    self.candidate_embeddings_fine[item.item_id] = cached[1]
 
         print(f"Added {len(items)} candidates, total: {len(self.candidates)}")
 
@@ -313,6 +428,54 @@ class PersonalRecSys:
         self._save_candidate_embedding_cache(embedding_cache)
         print(f"Embedded {len(items_to_embed)} candidates ({cache_hits} cache hits)")
 
+    def embed_candidates_fine(self, item_ids: List[str], batch_size: int = 10):
+        """为指定的部分候选内容（Top-M）生成/加载高精细（Gemini）embedding"""
+        if not self.fine_embedder:
+            return
+
+        embedding_cache_fine = self._load_candidate_embedding_cache_fine()
+        items_to_embed = []
+        texts = []
+        cache_hits = 0
+
+        for item_id in item_ids:
+            item = self.candidates.get(item_id)
+            if not item:
+                continue
+
+            if item.embedding_fine is not None:
+                continue
+
+            text = self._build_candidate_text(item)
+            text_hash = self._hash_candidate_text(text)
+            cached = embedding_cache_fine.get(item.item_id)
+
+            if cached and cached[0] == text_hash:
+                embedding = np.asarray(cached[1], dtype=np.float32)
+                item.embedding_fine = embedding
+                self.candidate_embeddings_fine[item.item_id] = embedding
+                cache_hits += 1
+                continue
+
+            items_to_embed.append((item, text_hash))
+            texts.append(text)
+
+        if not items_to_embed:
+            if cache_hits:
+                print(f"Embedded 0 fine candidates ({cache_hits} fine cache hits)")
+            return
+
+        embeddings = self.fine_embedder.embed_batch(texts, batch_size=batch_size)
+
+        for (item, text_hash), emb in zip(items_to_embed, embeddings):
+            embedding = np.asarray(emb, dtype=np.float32)
+            item.embedding_fine = embedding
+            self.candidate_embeddings_fine[item.item_id] = embedding
+            embedding_cache_fine[item.item_id] = (text_hash, embedding)
+
+        self._save_candidate_embedding_cache_fine(embedding_cache_fine)
+        print(f"Embedded {len(items_to_embed)} fine candidates ({cache_hits} fine cache hits)")
+
     def recommend(self,
                   top_k: int = 20,
                   preset: str = "balanced",
@@ -339,6 +502,7 @@ class PersonalRecSys:
         # 构建 ProfileContext
         profile_ctx = ProfileContext(
             vector_cloud=self.vector_cloud,
+            vector_cloud_fine=self.vector_cloud_fine,
             explicit_profile=self.explicit_profile,
             feedback_memory=self.feedback_memory,
             summary=self.get_profile_summary()
@@ -353,7 +517,9 @@ class PersonalRecSys:
             custom_weights=custom_weights,
             min_score=min_score,
             collection_items=self.collection_items,
+            recsys_instance=self,
         )
+
 
         return RecommendationResult(
             ranked_items=result["ranked_items"],

@@ -17,6 +17,8 @@ class ProfileContext:
     explicit_profile: object = None  # UserExplicitProfile
     feedback_memory: object = None # FeedbackMemory
     summary: Dict = field(default_factory=dict)
+    vector_cloud_fine: Optional[object] = None  # 高精细向量云
+
 
 
 @dataclass

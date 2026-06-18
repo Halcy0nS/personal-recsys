@@ -180,7 +180,13 @@ class ProfileExtractor:
 
         # 实际调用LLM
         try:
-            if hasattr(self.llm_client, 'chat'):
+            if hasattr(self.llm_client, 'extract_profile'):
+                # 适配新版 DeepSeekClient
+                response_dict = self.llm_client.extract_profile(prompt)
+                if response_dict:
+                    return json.dumps(response_dict)
+                return self._mock_response()
+            elif hasattr(self.llm_client, 'chat'):
                 response = self.llm_client.chat(
                     messages=[
                         {"role": "system", "content": self.system_prompt},
@@ -192,7 +198,7 @@ class ProfileExtractor:
                 response = self.llm_client.complete(prompt=prompt, system=self.system_prompt)
                 return response
             else:
-                raise ValueError("LLM client must have 'chat' or 'complete' method")
+                raise ValueError("LLM client must have 'chat', 'complete', or 'extract_profile' method")
         except Exception as e:
             print(f"LLM call failed: {e}")
             return self._mock_response()

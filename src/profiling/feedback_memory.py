@@ -113,12 +113,23 @@ class FeedbackMemory:
     def get_facet_score(self, facet: str) -> int:
         return self.facet_prefs.get(facet, 0)
         
-    def get_negative_vectors_matrix(self) -> np.ndarray:
+    def get_negative_vectors_matrix(self, target_dim: Optional[int] = None) -> np.ndarray:
         if not self.negative_vectors:
-            return np.empty((0, 0))
+            return np.empty((0, target_dim or 0), dtype=np.float32)
+        if target_dim is not None:
+            valid_vecs = [v for v in self.negative_vectors.values() if len(v) == target_dim]
+            if not valid_vecs:
+                return np.empty((0, target_dim), dtype=np.float32)
+            return np.array(valid_vecs, dtype=np.float32)
         return np.array(list(self.negative_vectors.values()), dtype=np.float32)
         
-    def get_duplicate_vectors_matrix(self) -> np.ndarray:
+    def get_duplicate_vectors_matrix(self, target_dim: Optional[int] = None) -> np.ndarray:
         if not self.duplicate_vectors:
-            return np.empty((0, 0))
+            return np.empty((0, target_dim or 0), dtype=np.float32)
+        if target_dim is not None:
+            valid_vecs = [v for v in self.duplicate_vectors.values() if len(v) == target_dim]
+            if not valid_vecs:
+                return np.empty((0, target_dim), dtype=np.float32)
+            return np.array(valid_vecs, dtype=np.float32)
         return np.array(list(self.duplicate_vectors.values()), dtype=np.float32)
+

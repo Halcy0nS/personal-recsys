@@ -62,7 +62,7 @@ def step_3_recommend() -> tuple[list, dict]:
     use_lmstudio = False
     try:
         import urllib.request
-        resp = urllib.request.urlopen(f"{lm_studio_url}/models", timeout=2)
+        resp = urllib.request.urlopen(f"{lm_studio_url}/models", timeout=10)
         use_lmstudio = True
     except Exception:
         use_lmstudio = False
@@ -70,12 +70,18 @@ def step_3_recommend() -> tuple[list, dict]:
     if use_lmstudio:
         print("  ✓ 检测到 LM Studio 在线，将使用本地 BGE 模型进行文本向量化 (1024维)。")
         config = PipelineConfig(
-            embedding_dim=1024,
+            embedding_dim=1024, 
             top_k=5,
             preset="precision",
             enable_reranker=True,
             embedder_type="lmstudio",
-            reranker_model="Qwen/Qwen2.5-7B-Instruct"
+            reranker_model="qwen3-reranker-8b",
+            reranker_base_url=lm_studio_url,
+            reranker_api_key="not-needed",
+            rerank_strategy="pointwise",
+            rerank_top_n=50,
+            enable_dual_embedder=False,
+            min_score=0.7  # raised back up slightly because BGE scores are high
         )
         embedder = get_embedder(
             "lmstudio",
@@ -91,9 +97,13 @@ def step_3_recommend() -> tuple[list, dict]:
             preset="precision",
             enable_reranker=True,
             embedder_type="gemini",
-            reranker_model="Qwen/Qwen2.5-7B-Instruct"
+            reranker_model="deepseek-v4-flash",
+            reranker_base_url="https://api.deepseek.com/anthropic",
+            reranker_api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+            enable_dual_embedder=False
         )
         embedder = get_embedder("gemini", dim=768)
+
     
     recsys = PersonalRecSys(embedder=embedder, config=config)
 
@@ -154,9 +164,9 @@ def step_4_delivery(ranked_items, candidates):
         md_content += f"## {idx+1}. [{cand.title}]({url})\n"
         md_content += f"> **作者**: {author} | **综合推荐指数**: {item.final_score:.3f}\n>\n"
         
-        # 处理 Reranker 返回的 reasoning
-        if hasattr(item, "component_scores") and "rerank" in item.component_scores:
-            md_content += f"> 💡 **AI 推荐理由**: {item.reasoning if hasattr(item, 'reasoning') else '高度契合核心研究方向'}\n\n"
+        # 处理 Reranker/Knowledge Capsule 返回的 reasoning
+        if hasattr(item, "reasoning") and item.reasoning:
+            md_content += f"> 💡 **AI 推荐理由**: {item.reasoning}\n\n"
         else:
             md_content += "> 💡 **AI 推荐理由**: (纯向量匹配命中)\n\n"
             
@@ -195,8 +205,8 @@ def main():
     
     try:
         step_0_harvest()
-        # step_1_ingest() # 暂时注释，避免在测试期间重复抓取
-        # step_2_compile() # 暂时注释，使用已有的胶囊
+        step_1_ingest()
+        step_2_compile()
         ranked_items, candidates = step_3_recommend()
         if ranked_items:
             step_4_delivery(ranked_items, candidates)

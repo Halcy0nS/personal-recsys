@@ -27,7 +27,14 @@ class PipelineConfig:
     lm_studio_base_url: str = "http://localhost:1234/v1"
     llm_model: str = "qwen/qwen3.5-9b"
     embedding_model: str = "text-embedding-bge-large-zh-v1.5"
-    reranker_model: str = "Qwen/Qwen2.5-7B-Instruct"
+
+    # DeepSeek V4 Flash API
+    deepseek_api_key: str = "sk-2b5c00e1b2a646bcac1d882dbf19e00e"
+    deepseek_base_url: str = "https://api.deepseek.com/chat/completions"
+    deepseek_model: str = "deepseek-v4-flash"
+
+    # Pipeline Mode
+    enable_knowledge_capsule: bool = True  # True: 知识胶囊模式, False: 普通模式
 
     # Profile
     max_profile_items: int = 50
@@ -48,13 +55,20 @@ class PipelineConfig:
     min_score: Optional[float] = None
 
     # Reranker
-    enable_reranker: bool = False
-    rerank_strategy: str = "pointwise"
+    enable_reranker: bool = True  # 是否启用重排
+    rerank_strategy: str = "cross_encoder"  # 现在改为 cross_encoder
     rerank_top_n: int = 50
     rerank_weight: float = 0.50  # RERANK 在最终融合中的权重占比（启用 rerank 时生效）
-    reranker_base_url: str = "https://api.siliconflow.cn/v1"
-    reranker_api_key: str = field(default_factory=lambda: os.getenv("SILICONFLOW_API_KEY", ""))
+    reranker_model: str = "qwen3-reranker-8b"
+    reranker_base_url: str = "http://localhost:1234/v1"
+    reranker_api_key: str = ""
+
+    # Dual Embedder
+    enable_dual_embedder: bool = False
+    fine_embedder_type: str = "gemini"
+    fine_embedding_dim: int = 768
 
     # Processing
     batch_size: int = 32
     cache_dir: Optional[str] = None
+

@@ -61,7 +61,7 @@ class LMStudioLLMClient:
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> ChatResponse:
         """
-        调用 LM Studio chat completions API
+        调用 LLM chat completions API (支持 OpenAI 协议与 Anthropic 协议自适应)
 
         Args:
             messages: [{"role": "system", "content": ...}, {"role": "user", "content": ...}]
@@ -69,21 +69,55 @@ class LMStudioLLMClient:
         Returns:
             ChatResponse 兼容 OpenAI 格式
         """
-        url = f"{self.base_url}/chat/completions"
-        payload_dict: Dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-        }
-        payload_dict.update(self.extra_body)
-        if extra_body:
-            payload_dict.update(extra_body)
-        payload = json.dumps(payload_dict).encode("utf-8")
+        is_anthropic = "anthropic" in self.base_url.lower() or "claude" in self.model.lower()
 
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        if is_anthropic:
+            system_content = None
+            user_messages = []
+            for msg in messages:
+                if msg.get("role") == "system":
+                    system_content = msg.get("content")
+                else:
+                    user_messages.append({
+                        "role": msg.get("role"),
+                        "content": msg.get("content")
+                    })
+            url = f"{self.base_url}/v1/messages"
+            payload_dict = {
+                "model": self.model,
+                "messages": user_messages,
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+            }
+            if system_content:
+                payload_dict["system"] = system_content
+            
+            payload_dict.update(self.extra_body)
+            if extra_body:
+                payload_dict.update(extra_body)
+            payload = json.dumps(payload_dict).encode("utf-8")
+
+            headers = {
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json"
+            }
+        else:
+            url = f"{self.base_url}/chat/completions"
+            payload_dict: Dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+            }
+            payload_dict.update(self.extra_body)
+            if extra_body:
+                payload_dict.update(extra_body)
+            payload = json.dumps(payload_dict).encode("utf-8")
+
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
 
         last_error: Optional[Exception] = None
         for attempt in range(1, self.max_retries + 1):
@@ -111,8 +145,17 @@ class LMStudioLLMClient:
         else:
             raise last_error or RuntimeError("chat request failed without explicit error")
 
-        message = result["choices"][0]["message"]
-        content = message.get("content", "")
+        if is_anthropic:
+            content_blocks = result.get("content", [])
+            content = ""
+            for block in content_blocks:
+                if block.get("type") == "text":
+                    content += block.get("text", "")
+            reasoning_content = ""
+        else:
+            message = result["choices"][0]["message"]
+            content = message.get("content", "")
+            reasoning_content = message.get("reasoning_content", "")
 
         return ChatResponse(
             choices=[
@@ -120,7 +163,7 @@ class LMStudioLLMClient:
                     message=ChatMessage(
                         role="assistant",
                         content=content,
-                        reasoning_content=message.get("reasoning_content", ""),
+                        reasoning_content=reasoning_content,
                     )
                 )
             ],

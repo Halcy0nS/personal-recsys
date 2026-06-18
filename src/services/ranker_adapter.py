@@ -82,11 +82,14 @@ class DefaultRanker(BaseRanker):
         item_embeddings = {}
         for item in ranked_items:
             cand = candidates.get(item.item_id)
-            if cand and cand.embedding is not None:
-                emb = cand.embedding / (np.linalg.norm(cand.embedding) + 1e-8)
-            else:
-                emb = None
+            emb = None
+            if cand:
+                if getattr(cand, "embedding_fine", None) is not None:
+                    emb = cand.embedding_fine / (np.linalg.norm(cand.embedding_fine) + 1e-8)
+                elif cand.embedding is not None:
+                    emb = cand.embedding / (np.linalg.norm(cand.embedding) + 1e-8)
             item_embeddings[item.item_id] = emb
+
 
         selected = []
         unselected = list(ranked_items)

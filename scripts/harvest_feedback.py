@@ -99,7 +99,28 @@ def harvest_siyuan_feedback():
     candidates = load_wiki_candidates("datacrawl/rss_crawler/data/compressed")
     cand_dict = {c.item_id: c for c in candidates}
     
-    embedder = get_embedder("gemini", dim=768)
+    # 检测 LM Studio 是否在线
+    lm_studio_url = "http://localhost:1234/v1"
+    use_lmstudio = False
+    try:
+        import urllib.request
+        resp = urllib.request.urlopen(f"{lm_studio_url}/models", timeout=2)
+        use_lmstudio = True
+    except Exception:
+        use_lmstudio = False
+
+    if use_lmstudio:
+        print("  ✓ 检测到 LM Studio 在线，Feedback Harvester 使用本地 BGE 模型进行文本向量化 (1024维)。")
+        embedder = get_embedder(
+            "lmstudio",
+            dim=1024,
+            base_url=lm_studio_url,
+            model="text-embedding-bge-large-zh-v1.5"
+        )
+    else:
+        print("  ! LM Studio 未启动。Feedback Harvester 自动回退使用 Google Gemini 进行文本向量化 (768维)。")
+        embedder = get_embedder("gemini", dim=768)
+
     fml = FeedbackMemory()
 
     processed_count = 0
@@ -110,8 +131,9 @@ def harvest_siyuan_feedback():
             print(f"[-] 未找到 ID 为 {item_id} 的候选文章，跳过。")
             continue
             
-        # 实时 Embedding (如果在缓存中则直接命中)
-        vector = embedder.embed([cand.content[:2000]])[0]
+        # 实时 Embedding (使用统一的 string 参数)
+        vector = embedder.embed(cand.content[:2000])
+
         
         metadata = cand.metadata.get("frontmatter", {})
         source = cand.metadata.get("source", "unknown")

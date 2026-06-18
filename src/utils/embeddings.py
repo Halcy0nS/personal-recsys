@@ -237,10 +237,11 @@ class GoogleEmbedder(BaseEmbedder):
                 raise ImportError("Please install google-genai: pip install google-genai")
         return self.client
 
-    def _call_api_with_fallback(self, client, contents: Union[str, List[str]], max_retries: int = 5) -> List[np.ndarray]:
+    def _call_api_with_fallback(self, client, contents: Union[str, List[str]], max_retries: int = 8) -> List[np.ndarray]:
         from google.genai import types
         import random
         import time
+        import re
 
         # 将输入文本统一包装为 types.Content 对象列表，以防止 SDK 在处理 list[str] 时将其聚合为单个 embedding
         if isinstance(contents, str):
@@ -286,7 +287,14 @@ class GoogleEmbedder(BaseEmbedder):
 
                 # 如果是 429 且未超重试次数，执行退避重试
                 if is_429 and attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                    # 尝试从错误信息中提取推荐的重试等待时间
+                    match = re.search(r"Please retry in ([0-9.]+)s", err_msg)
+                    if match:
+                        delay = float(match.group(1)) + 1.5
+                        print(f"  [Gemini Embedder] 触发 429 限流，第 {attempt+1} 次重试，提取 API 建议延迟: {delay:.2f}s，开始休眠等待...")
+                    else:
+                        delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                        print(f"  [Gemini Embedder] 触发 429 限流，第 {attempt+1} 次重试，使用退避延迟: {delay:.2f}s，开始休眠等待...")
                     time.sleep(delay)
                     continue
 
